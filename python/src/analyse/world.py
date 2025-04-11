@@ -699,9 +699,10 @@ def extract_indices_by_country(results: Dict) -> Dict:
     return indices_by_country
 
 
-def extract_latest_indices_by_country(results: Dict) -> Dict:
+def extract_latest_indices_by_country(results: dict) -> dict:
     """
-    Extrait les indices par pays pour la période la plus récente uniquement
+    Extrait les indices par pays pour la période la plus récente, en s'assurant
+    que tous les pays sont inclus
 
     Args:
         results: Dictionnaire des résultats d'analyse
@@ -709,82 +710,155 @@ def extract_latest_indices_by_country(results: Dict) -> Dict:
     Returns:
         Dictionnaire contenant les indices les plus récents par pays
     """
+    import pandas as pd
+    import numpy as np
+    from collections import defaultdict
+
     latest_indices_by_country = {}
 
-    # Déterminer la période la plus récente
+    # Récupérer toutes les périodes disponibles
     all_periods = set()
     for country_data in results["countries_data"].values():
         if "indices" in country_data:
             all_periods.update(country_data["indices"].keys())
 
-    if not all_periods:
+    # Convertir en liste et trier pour obtenir la période la plus récente
+    periods_list = sorted(list(all_periods))
+
+    if not periods_list:
+        print("Aucune période trouvée dans les données")
         return {}
 
-    latest_period = sorted(all_periods)[-1]
+    latest_period = periods_list[-1]
     print(f"Extraction des indices pour la période la plus récente: {latest_period}")
 
-    # Extraire les indices pour chaque pays
+    # Pour chaque pays dans les données, essayer d'extraire ses indices pour la période la plus récente
+    # Si non disponible, chercher la période la plus récente disponible pour ce pays
     for country_name, country_data in results["countries_data"].items():
-        if "indices" in country_data and latest_period in country_data["indices"]:
+        if "indices" not in country_data:
+            continue
+
+        # Vérifier si la période la plus récente est disponible pour ce pays
+        if latest_period in country_data["indices"]:
             latest_indices_by_country[country_name] = {
                 "period": latest_period,
                 "pollutants": country_data["indices"][latest_period]
             }
+        else:
+            # Si la période la plus récente n'est pas disponible, prendre la dernière période disponible
+            country_periods = sorted(list(country_data["indices"].keys()))
+            if country_periods:
+                country_latest = country_periods[-1]
+                latest_indices_by_country[country_name] = {
+                    "period": country_latest,
+                    "pollutants": country_data["indices"][country_latest]
+                }
+
+    # Vérifier combien de pays ont été extraits
+    print(f"Nombre de pays extraits: {len(latest_indices_by_country)}")
 
     return latest_indices_by_country
 
 
-def extract_composite_indices_by_country(results: Dict) -> Dict:
+def extract_indices_by_country_all_periods(results: dict) -> dict:
     """
-    Extrait les indices pour le polluant composite uniquement
+    Extrait les indices par pays pour toutes les périodes disponibles
 
     Args:
         results: Dictionnaire des résultats d'analyse
 
     Returns:
-        Dictionnaire contenant les indices composite par pays et par période
+        Dictionnaire contenant les indices par pays et par période
     """
-    composite_indices = {}
+    indices_by_country = {}
 
     for country_name, country_data in results["countries_data"].items():
-        composite_indices[country_name] = {
+        indices_by_country[country_name] = {
             "periods": {}
         }
 
         # Extraire les indices pour chaque période
         if "indices" in country_data:
             for period, period_data in country_data["indices"].items():
-                if "composite" in period_data:
-                    composite_indices[country_name]["periods"][period] = period_data["composite"]
+                indices_by_country[country_name]["periods"][period] = period_data
 
-    return composite_indices
+    # Vérifier combien de pays ont été extraits
+    print(f"Nombre de pays extraits (toutes périodes): {len(indices_by_country)}")
+
+    return indices_by_country
 
 
-def save_indices_files(results: Dict, output_dir):
+def save_indices_files(results: dict, output_folder: str):
     """
-    Sauvegarde plusieurs fichiers d'indices par pays
+    Sauvegarde plusieurs fichiers d'indices par pays, avec gestion des erreurs
+    et conversion des types NumPy
 
     Args:
         results: Dictionnaire des résultats d'analyse
     """
+    import json
+
+    # Fonction pour convertir les types NumPy en types Python natifs
+    def convert_numpy_types(obj):
+        """Convertit récursivement les types NumPy en types Python natifs"""
+        import numpy as np
+        import pandas as pd
+
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_numpy_types(v) for v in obj]
+        elif isinstance(obj, tuple):
+            return tuple(convert_numpy_types(v) for v in obj)
+        elif pd.isna(obj):
+            return None
+        return obj
 
     # 1. Tous les indices par pays et période
-    all_indices = extract_indices_by_country(results)
-    with open(output_dir+'indices_by_country.json', 'w') as f:
-        json.dump(convert_numpy_types(all_indices), f, indent=2)
-    print("Indices par pays sauvegardés dans indices_by_country.json")
+    all_indices = extract_indices_by_country_all_periods(results)
+    try:
+        with open(output_folder+'indices_by_country.json', 'w') as f:
+            json.dump(convert_numpy_types(all_indices), f, indent=2)
+        print("Indices par pays sauvegardés dans indices_by_country.json")
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde des indices par pays: {e}")
 
     # 2. Indices de la période la plus récente uniquement
     latest_indices = extract_latest_indices_by_country(results)
-    with open(output_dir+'latest_indices_by_country.json', 'w') as f:
-        json.dump(convert_numpy_types(latest_indices), f, indent=2)
-    print("Indices les plus récents par pays sauvegardés dans latest_indices_by_country.json")
+    try:
+        with open(output_folder+'latest_indices_by_country.json', 'w') as f:
+            json.dump(convert_numpy_types(latest_indices), f, indent=2)
+        print("Indices les plus récents par pays sauvegardés dans latest_indices_by_country.json")
+
+        # Liste des pays pour vérification
+        country_list = sorted(list(latest_indices.keys()))
+        print(f"Liste des premiers 10 pays (sur {len(country_list)}):")
+        for i, country in enumerate(country_list[:10]):
+            print(f"  {i + 1}. {country}")
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde des indices les plus récents: {e}")
 
     # 3. Indices composite uniquement
-    composite_indices = extract_composite_indices_by_country(results)
-    with open(output_dir+'composite_indices_by_country.json', 'w') as f:
-        json.dump(convert_numpy_types(composite_indices), f, indent=2)
-    print("Indices composite par pays sauvegardés dans composite_indices_by_country.json")
+    composite_indices = {}
+    for country, data in all_indices.items():
+        composite_indices[country] = {"periods": {}}
+
+        for period, pollutants in data["periods"].items():
+            if "composite" in pollutants:
+                composite_indices[country]["periods"][period] = pollutants["composite"]
+
+    try:
+        with open(output_folder+'composite_indices_by_country.json', 'w') as f:
+            json.dump(convert_numpy_types(composite_indices), f, indent=2)
+        print("Indices composite par pays sauvegardés dans composite_indices_by_country.json")
+    except Exception as e:
+        print(f"Erreur lors de la sauvegarde des indices composite: {e}")
 
 
 if __name__ == "__main__":
@@ -796,10 +870,13 @@ if __name__ == "__main__":
 
     output_folder = 'resultats/world/'
 
+    ignore_country = ["Turkey"]
+
     # Charger les données
     try:
         with open(input_data_sensors, 'r') as f:
             sensor_data = json.load(f)
+            sensor_data = {country: data for country, data in sensor_data.items() if country not in ignore_country}
     except FileNotFoundError:
         print("Fichier sensor_data.json non trouvé.")
         sys.exit(1)
@@ -807,6 +884,7 @@ if __name__ == "__main__":
     try:
         with open(input_data_pib, 'r') as f:
             gdp_data = json.load(f)
+            gdp_data = [country for country in gdp_data if country["Country Name"] not in ignore_country]
     except FileNotFoundError:
         print("Fichier gdp_data.json non trouvé.")
         sys.exit(1)
